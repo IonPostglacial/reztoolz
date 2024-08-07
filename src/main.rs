@@ -129,10 +129,9 @@ fn extract_rez_hierarchy(dir: &mut RezDirectoryIterator, output_dir: &Path) {
 
 fn main() {
     let mut args = env::args();
-    let input = args.nth(1).expect("input REZ file");
-    let output = args.next().expect("output directory");
+    let cmd = args.nth(1).expect("command name");
+    let input = args.next().expect("input REZ file");
     let input = read(input).expect("file to exist");
-    create_dir(&output).expect("being able to create the root directory");
     let header = RezHeader {
         description: String::from_utf8_lossy(&input[0..127]),
         version: u32::from_le_bytes(input[127..131].try_into().unwrap()),
@@ -149,6 +148,14 @@ fn main() {
         offset: header.dir_offset,
         end: header.dir_offset + header.dir_size,
     };
-    display_rez_hierarchy(&mut root_iterator);
-    extract_rez_hierarchy(&mut root_iterator, Path::new(&output));
+    match cmd.as_str() {
+        "tree" => display_rez_hierarchy(&mut root_iterator),
+        "extract" => {
+            let output = args.next().expect("output directory");
+            create_dir(&output).expect("being able to create the root directory");
+            extract_rez_hierarchy(&mut root_iterator, Path::new(&output));
+        }
+        _ => println!("unknown command {cmd}"),
+    }
+    
 }
