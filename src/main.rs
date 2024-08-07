@@ -7,8 +7,6 @@ struct RezHeader<'a> {
     version: u32,
     dir_offset: usize,
     dir_size: usize,
-    unknown: u32,
-    idx_offset: usize,
     datetime: u32,
     dir_name_max: usize,
     file_name_max: usize,
@@ -29,8 +27,6 @@ struct RezEntryContent<'a> {
 }
 
 struct RezEntry<'a> {
-    offset: usize,
-    size: usize,
     content: RezEntryContent<'a>,
 }
 
@@ -51,10 +47,7 @@ fn parse_entry<'a>(input: &'a [u8], offset: usize, end: usize, path: &Path, cb: 
             name_end += 1;
         }
         let name = String::from_utf8_lossy(&input[offset+16..name_end]);
-        // println!(">> dir: {}", &path.join(&*name).to_str().expect("path to be valid string"));
-        cb(RezEntry { 
-            offset, 
-            size: entry_size, 
+        cb(RezEntry {
             content: RezEntryContent { 
                 path: path.join(&*name), 
                 datetime, 
@@ -79,16 +72,8 @@ fn parse_entry<'a>(input: &'a [u8], offset: usize, end: usize, path: &Path, cb: 
         let mut name = str::from_utf8(&input[extension_end+5..name_end]).expect("string to contain only ascii").to_string();
         name.push('.');
         name.extend(reversed_extension.chars().rev());
-        let file_path = &path.join(&*name);
-        // println!("- file: {}", file_path.to_str().expect("path to be valid string"));
         let content = &input[entry_offset..entry_offset+entry_size];
-        // if reversed_extension == "TXT" {
-        //     println!("content");
-        //     println!("{}", String::from_utf8_lossy(content));
-        // }
-        cb(RezEntry { 
-            offset, 
-            size: entry_size, 
+        cb(RezEntry {
             content: RezEntryContent { 
                 path: path.join(&*name), 
                 datetime, 
@@ -107,8 +92,6 @@ fn main() {
         version: u32::from_le_bytes(input[127..131].try_into().unwrap()),
         dir_offset: u32::from_le_bytes(input[131..135].try_into().unwrap()) as usize,
         dir_size: u32::from_le_bytes(input[135..139].try_into().unwrap()) as usize,
-        unknown: u32::from_le_bytes(input[139..143].try_into().unwrap()),
-        idx_offset: u32::from_le_bytes(input[143..147].try_into().unwrap()) as usize,
         datetime: u32::from_le_bytes(input[147..151].try_into().unwrap()),
         dir_name_max: u32::from_le_bytes(input[155..159].try_into().unwrap()) as usize,
         file_name_max: u32::from_le_bytes(input[159..163].try_into().unwrap()) as usize,
@@ -117,10 +100,10 @@ fn main() {
     parse_entry(&input, header.dir_offset, header.dir_offset + header.dir_size, Path::new(""), |entry: RezEntry| {
         match entry.content.kind {
             Some(RezEntryContentKind::Directory) => {
-                println!("- file: {}", entry.content.path.to_str().expect("path to be valid string"))
+                println!(">> dir: {}", entry.content.path.to_str().expect("path to be valid string"))
             }
             Some(RezEntryContentKind::File { id, content }) => {
-                println!(">> dir: {}", entry.content.path.to_str().expect("path to be valid string"));
+                println!("- file: {}", entry.content.path.to_str().expect("path to be valid string"));
             }
             None => {}
         }
