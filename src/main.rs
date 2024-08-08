@@ -1,9 +1,9 @@
 use core::str;
-use std::{borrow::Cow, env, fs::{create_dir, read, File}, io::Write, path::{Path, PathBuf}};
+use std::{env, fs::{create_dir, read, File}, io::Write, path::Path};
 
 #[derive(Debug)]
 struct RezHeader<'a> {
-    description: Cow<'a, str>,
+    description: &'a str,
     version: u32,
     dir_offset: usize,
     dir_size: usize,
@@ -18,19 +18,19 @@ enum RezEntryContentKind<'a> {
     },
     File {
         id: u32,
+        extension: &'a [u8],
         content: &'a [u8],
     }
 }
 
 struct RezEntry<'a> {
-    path: PathBuf,
+    name: &'a [u8],
     datetime: u32,
     kind: Option<RezEntryContentKind<'a>>,
 }
 
 struct RezDirectoryIterator<'a> {
     input: &'a [u8],
-    path: PathBuf,
     offset: usize,
     end: usize,
 }
@@ -54,17 +54,15 @@ impl<'a> Iterator for RezDirectoryIterator<'a> {
             while self.input[name_end] != b'\0' && name_end < self.end  {
                 name_end += 1;
             }
-            let name = String::from_utf8_lossy(&self.input[self.offset + 16..name_end]);
+            let name = &self.input[self.offset + 16..name_end];
             self.offset = name_end + 1;
             self.end = name_end + 1 + entry_size;
-            let path = self.path.join(&*name);
             Some(RezEntry {
-                path: path.clone(), 
+                name, 
                 datetime, 
                 kind: Some(RezEntryContentKind::Directory {
                     children: RezDirectoryIterator {
                         input: &self.input,
-                        path,
                         offset: entry_offset,
                         end: entry_offset + entry_size,
                     },
@@ -76,50 +74,62 @@ impl<'a> Iterator for RezDirectoryIterator<'a> {
             while self.input[extension_end] != b'\0' && extension_end < self.end {
                 extension_end += 1;
             }
-            let reversed_extension = String::from_utf8_lossy(&self.input[self.offset + 20..extension_end]);
             let mut name_end = extension_end + 5;
             while self.input[name_end] != b'\0' && name_end < self.end  {
                 name_end += 1;
             }
-            let mut name = str::from_utf8(&self.input[extension_end + 5..name_end]).expect("string to contain only ascii").to_string();
-            name.push('.');
-            name.extend(reversed_extension.chars().rev());
             let content = &self.input[entry_offset..entry_offset + entry_size];
+            let name = &self.input[extension_end + 5..name_end];
+            let extension = &self.input[self.offset + 20..extension_end];
             self.offset = name_end + 2;
             self.end = name_end + 2 + entry_size;
             Some(RezEntry {
-                path: self.path.join(&*name), 
+                name, 
                 datetime, 
-                kind: Some(RezEntryContentKind::File { id: file_id, content }),
+                kind: Some(RezEntryContentKind::File { 
+                    id: file_id,
+                    extension,
+                    content
+                }),
             })
         }
     }
 }
 
-fn display_rez_hierarchy(dir: &mut RezDirectoryIterator) {
+fn display_rez_hierarchy(dir: &mut RezDirectoryIterator, path: &Path) {
     for entry in dir {
+        let name = str::from_utf8(entry.name).expect("path to be valid string");
+        let full_path = path.join(Path::new(name));
         match entry.kind {
             Some(RezEntryContentKind::Directory { mut children }) => {
-                println!(">> dir: {}", entry.path.to_str().expect("path to be valid string"));
-                display_rez_hierarchy(&mut children);
+                println!(">> dir: {}", &full_path.to_str().expect("path to be valid string"));
+                display_rez_hierarchy(&mut children, &full_path);
             }
-            Some(RezEntryContentKind::File { id, content }) => {
-                println!("- file: {}", entry.path.to_str().expect("path to be valid string"));
+            Some(RezEntryContentKind::File { id, extension, content }) => {
+                let mut full_name = full_path.to_str().expect("path to be valid string").to_string();
+                full_name.push('.');
+                full_name.extend(str::from_utf8(extension).expect("extension to be valid string").chars().rev());
+                println!("- file: {}", full_name);
             }
             None => {}
         }   
     }
 }
 
-fn extract_rez_hierarchy(dir: &mut RezDirectoryIterator, output_dir: &Path) {
+fn extract_rez_hierarchy(dir: &mut RezDirectoryIterator, output_dir: &Path, path: &Path) {
     for entry in dir {
+        let name = str::from_utf8(entry.name).expect("path to be valid string");
+        let full_path = path.join(Path::new(name));
         match entry.kind {
             Some(RezEntryContentKind::Directory { mut children }) => {
-                create_dir(output_dir.join(entry.path)).expect("being able to create the directory");
-                extract_rez_hierarchy(&mut children, output_dir);
+                create_dir(output_dir.join(&full_path)).expect("being able to create the directory");
+                extract_rez_hierarchy(&mut children, output_dir, &full_path);
             }
-            Some(RezEntryContentKind::File { id, content }) => {
-                let mut file = File::create(output_dir.join(entry.path)).expect("being able to create file");
+            Some(RezEntryContentKind::File { id, extension, content }) => {
+                let mut full_name = full_path.to_str().expect("path to be valid string").to_string();
+                full_name.push('.');
+                full_name.extend(str::from_utf8(extension).expect("extension to be valid string").chars().rev());
+                let mut file = File::create(output_dir.join(&full_name)).expect("being able to create file");
                 file.write(content).expect("being able to write in the file");
             }
             None => {}
@@ -133,7 +143,7 @@ fn main() {
     let input = args.next().expect("input REZ file");
     let input = read(input).expect("file to exist");
     let header = RezHeader {
-        description: String::from_utf8_lossy(&input[0..127]),
+        description: str::from_utf8(&input[0..127]).expect("description to be valid utf-8"),
         version: u32::from_le_bytes(input[127..131].try_into().unwrap()),
         dir_offset: u32::from_le_bytes(input[131..135].try_into().unwrap()) as usize,
         dir_size: u32::from_le_bytes(input[135..139].try_into().unwrap()) as usize,
@@ -144,16 +154,15 @@ fn main() {
     println!("header: {header:#?}");
     let mut root_iterator = RezDirectoryIterator {
         input: &input,
-        path: Path::new("").to_path_buf(),
         offset: header.dir_offset,
         end: header.dir_offset + header.dir_size,
     };
     match cmd.as_str() {
-        "tree" => display_rez_hierarchy(&mut root_iterator),
+        "tree" => display_rez_hierarchy(&mut root_iterator, Path::new("")),
         "extract" => {
             let output = args.next().expect("output directory");
             create_dir(&output).expect("being able to create the root directory");
-            extract_rez_hierarchy(&mut root_iterator, Path::new(&output));
+            extract_rez_hierarchy(&mut root_iterator, Path::new(&output), Path::new(""));
         }
         _ => println!("unknown command {cmd}"),
     }
