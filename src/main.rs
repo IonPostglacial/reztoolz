@@ -1,5 +1,7 @@
 use core::str;
 mod rez;
+mod pid;
+mod wwd;
 use std::{env, fs::{create_dir, read, File}, io::Write, path::Path};
 
 fn display_rez_hierarchy(dir: &mut rez::DirectoryIterator, path: &Path) {
